@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Step Counter</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-GLhlTQ8iRABdZLl6O3oVMWSktQOp6b7In1Zl3/Jr59b6EGGoI1aFkw7cmDA6j6gD" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"
+        integrity="sha256-qXBd/EfAdjOA2FGrGAG+b3YBn2tn5A6bhz+LSgYD96k=" crossorigin="anonymous"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.12.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.12.0/mapbox-gl.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+
+<body>
+    <div id="app">
+        <div class="d-flex flex-column vh-100">
+            <div class="flex-grow-1 h-50">
+                <div id="map" class="h-100 w-100"></div>
+            </div>
+            <div>
+                <div class="d-flex justify-content-between align-items-center p-2 bg-dark">
+                    <h2 class="text-white m-0"><i class="bi bi-activity"></i> Activities</h2>
+                    <button v-if="startTime === null" class="btn btn-primary rounded-4" @click="start"><i
+                            class="bi bi-play-fill"></i> Start</button>
+                    <button v-else class="btn btn-primary rounded-4" @click="stop"><i class="bi bi-stop-fill"></i>
+                        Stop</button>
+                </div>
+            </div>
+            <div class="flex-grow-1 h-50 overflow-y-auto">
+                <ul class="list-group list-group-flush">
+                    <template v-for="(activitieList, startDate) in getActivitiesByDate">
+                        <li class="list-group-item bg-body-tertiary">
+                            <div class="text-body-secondary">{{ startDate }}</div>
+                        </li>
+                        <li class="list-group-item" v-for="activity in activitieList">
+                            <div class="row">
+                                <div class="col-4">{{ this.getTotalDistance(activity['total_distance']) }} km</div>
+                                <div class="col-4 text-center"><i class="bi bi-clock"></i> {{
+                                    this.getTotalTime(activity['start_date'], activity['end_date']) }}</div>
+                                <div class="col-4 text-end text-body-secondary">{{ this.getHour(activity['start_date'])
+                                    }}</div>
+                            </div>
+                        </li>
+                    </template>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-w76AqPfDkMBDXo30jS1Sgez6pr3x5MlQ1ZAGC+nuZB+EYdgRZgiwxhTBTkF7CXvN"
+        crossorigin="anonymous"></script>
+    <script>
+        mapboxgl.accessToken = 'pk.eyJ1IjoibWFvcm5ldCIsImEiOiJjbGRyNzc5Mm4xa3E4M3JvbHd2YTZ1ODBiIn0.qMe29wkxUir747iiBfbA3g';
+
+        const { createApp } = Vue;
+
+        createApp({
+            mounted() {
+                this.map = new mapboxgl.Map({
+                    container: 'map',
+                    style: 'mapbox://styles/mapbox/light-v11',
+                    zoom: 16,
+                    center: [0, 0]
+                });
+
+                this.map.on('load', () => {
+                    this.map.addSource('mapillary', {
+                        'type': 'vector',
+                        'tiles': [
+                            'http://127.0.0.1:8000/tiles/{z}/{x}/{y}.mvt'
+                        ]
+                    });
+                    this.map.addLayer(
+                        {
+                            'id': 'mapillary', // Layer ID
+                            'type': 'line',
+                            'source': 'mapillary', // ID of the tile source created above
+                            // Source has several layers. We visualize the one with name 'sequence'.
+                            'source-layer': 'default',
+                            'layout': {
+                                'line-cap': 'round',
+                                'line-join': 'round'
+                            },
+                            'paint': {
+                                'line-opacity': 0.6,
+                                'line-color': 'rgb(53, 175, 109)',
+                                'line-width': 2
+                            }
+                        },
+                    )
+                    this.map.addLayer('road-label-simple');
+                });
+
+                this.currentPositionMarker = new mapboxgl.Marker({ color: '#0a58ca' })
+                    .setLngLat([0, 0])
+                    .addTo(this.map);
+
+                navigator.geolocation.getCurrentPosition((position) => {
+                    this.map.setCenter([position.coords.longitude, position.coords.latitude]);
+                    this.currentPositionMarker.setLngLat([position.coords.longitude, position.coords.latitude]);
+                });
+
+                this.fetchActivity();
+            },
+
+            data() {
+                return {
+                    activities: [],
+                    map: null,
+                    currentPositionMarker: null,
+                    startTime: null,
+                    points: null,
+                    watchId: null,
+                }
+            },
+
+            computed: {
+                getActivitiesByDate() {
+                    return this.activities.reduce((acc, activity) => {
+                        const date = moment(activity['start_date']).format('DD MMM YYYY');
+                        if (!acc[date]) {
+                            acc[date] = [];
+                        }
+                        acc[date].push(activity);
+                        return acc;
+                    }, {});
+                }
+            },
+
+
+            methods: {
+                start() {
+                    this.startTime = Date.now();
+                    this.points = [];
+                    this.watchId = navigator.geolocation.watchPosition((position) => {
+                        this.points.push([position.coords.longitude, position.coords.latitude]);
+                        this.map.setCenter([position.coords.longitude, position.coords.latitude]);
+                        this.currentPositionMarker.setLngLat([position.coords.longitude, position.coords.latitude]);
+                    });
+                },
+                stop() {
+                    navigator.geolocation.clearWatch(this.watchId);
+                    this.addActivities();
+                    this.fetchActivity();
+                    this.startTime = null;
+                },
+                fetchActivity() {
+                    fetch('/activities')
+                        .then(response => response.json())
+                        .then(data => {
+                            this.activities = data;
+                        });
+                },
+                addActivities() {
+                    fetch('/activities', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            points: this.points,
+                            timestamp: [this.startTime, Date.now()],
+                        })
+                    });
+                },
+                getHour(date) {
+                    return moment(date).format('HH:mm');
+                },
+                getTotalTime(startDate, endDate) {
+                    const seconds = moment(endDate).diff(moment(startDate), 'seconds');
+                    const hours = Math.floor(seconds / 3600);
+                    const minutes = Math.floor((seconds - (hours * 3600)) / 60);
+                    const secondsLeft = seconds - (hours * 3600) - (minutes * 60);
+                    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secondsLeft).padStart(2, '0')}`;
+                },
+                getTotalDistance(distance) {
+                    return (distance / 1000).toFixed(2);
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>

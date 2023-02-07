@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+    <script>
+navigator.geolocation.getCurrentPosition(
+    (pos) => {
+        console.log(pos);
+    },
+    (err) => {
+        console.error(err);
+    },
+);
+    </script>
+</body>
+
+</html>
